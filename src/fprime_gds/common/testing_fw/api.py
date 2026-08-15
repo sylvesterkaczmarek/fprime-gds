@@ -1367,15 +1367,29 @@ class IntegrationTestAPI(DataHandler):
         if timeout:
             self.__log(f"{name} now awaiting for at most {timeout} s.")
             check_repeats = isinstance(history, ChronologicalHistory)
+            repeat_search = check_repeats and searcher.requires_repeats()
+            scoped_items = list(current) if repeat_search else None
+            scoped_item_ids = {id(item) for item in current} if repeat_search else None
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
-                if check_repeats:
-                    new_items = history.retrieve_new(searcher.requires_repeats())
+                if repeat_search:
+                    new_items = history.retrieve_new(True)
+                    changed = False
+                    for item in new_items:
+                        item_id = id(item)
+                        if item_id not in scoped_item_ids:
+                            scoped_item_ids.add(item_id)
+                            scoped_items.append(item)
+                            changed = True
+                    if changed:
+                        scoped_items.sort(key=lambda item: item.get_time())
+                        if searcher.search_current_history(scoped_items):
+                            return searcher.get_return_value()
                 else:
                     new_items = history.retrieve_new()
-                for item in new_items:
-                    if searcher.incremental_search(item):
-                        return searcher.get_return_value()
+                    for item in new_items:
+                        if searcher.incremental_search(item):
+                            return searcher.get_return_value()
                 time.sleep(0.1)
             self.__log(
                 f"{name} timed out and ended unsuccessfully.", TestLogger.YELLOW
@@ -1447,13 +1461,16 @@ class IntegrationTestAPI(DataHandler):
             def __init__(self, log, seq_preds):
                 super().__init__()
                 self.log = log
+                self.original_seq_preds = seq_preds.copy()
                 self.ret_val = []
-                self.seq_preds = seq_preds.copy()
+                self.seq_preds = self.original_seq_preds.copy()
                 self.repeats = True
                 msg = f"Beginning a sequence search of {len(self.seq_preds)} items."
                 self.log(msg, TestLogger.YELLOW)
 
             def search_current_history(self, items):
+                self.ret_val = []
+                self.seq_preds = self.original_seq_preds.copy()
                 if len(self.seq_preds) == 0:
                     msg = "Sequence search finished, as the specified sequence had 0 items."
                     self.log(msg, TestLogger.YELLOW)
